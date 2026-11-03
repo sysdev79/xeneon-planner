@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Xeneon Planner</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app" class="app">
+
+    <!-- 왼쪽: 캘린더 -->
+    <section class="panel panel-cal" id="panel-cal">
+      <header class="cal-head">
+        <div class="clock">
+          <div class="clock-time" id="clock-time">--:--</div>
+          <div class="clock-date" id="clock-date">-</div>
+        </div>
+        <div class="next" id="next-event">
+          <div class="next-label">다음 일정</div>
+          <div class="next-title">불러오는 중</div>
+          <div class="next-when"></div>
+        </div>
+      </header>
+      <div class="cal-body" id="cal-body">
+        <div class="empty">불러오는 중</div>
+      </div>
+    </section>
+
+    <!-- 오른쪽: 할일 -->
+    <section class="panel panel-task" id="panel-task">
+      <header class="task-head">
+        <div class="task-tabs" id="task-tabs"></div>
+        <div class="task-summary" id="task-summary"></div>
+      </header>
+      <div class="task-body" id="task-body">
+        <div class="empty">불러오는 중</div>
+      </div>
+      <form class="task-add" id="task-add" hidden>
+        <select id="add-list" class="add-list" aria-label="목록"></select>
+        <input id="add-title" class="add-title" type="text" placeholder="할일 추가" maxlength="200" autocomplete="off" />
+        <button type="submit" class="add-btn" aria-label="추가">+</button>
+      </form>
+    </section>
+
+    <!-- 상태 표시줄 -->
+    <footer class="status" id="status">
+      <span id="status-text">준비 중</span>
+      <button type="button" class="refresh-btn" id="refresh-btn" aria-label="새로고침">↻</button>
+    </footer>
+
+    <!-- 설정 안내(파라미터 누락 시) -->
+    <div class="setup" id="setup" hidden>
+      <h1>Xeneon Planner 설정 필요</h1>
+      <p>iFrame 태그의 주소에 <code>api</code> 와 <code>key</code> 파라미터가 필요합니다.</p>
+      <pre id="setup-sample"></pre>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
