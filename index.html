@@ -10,7 +10,7 @@
 <body>
   <div id="app" class="app">
 
-    <!-- 왼쪽: 캘린더 -->
+    <!-- 캘린더 -->
     <section class="panel panel-cal" id="panel-cal">
       <header class="cal-head">
         <div class="clock">
@@ -22,13 +22,18 @@
           <div class="next-title">불러오는 중</div>
           <div class="next-when"></div>
         </div>
+        <div class="range-tabs" id="range-tabs" role="tablist" aria-label="보기 범위">
+          <button type="button" class="rtab" data-range="day">일</button>
+          <button type="button" class="rtab" data-range="week">주</button>
+          <button type="button" class="rtab" data-range="month">월</button>
+        </div>
       </header>
       <div class="cal-body" id="cal-body">
         <div class="empty">불러오는 중</div>
       </div>
     </section>
 
-    <!-- 오른쪽: 할일 -->
+    <!-- 할일 -->
     <section class="panel panel-task" id="panel-task">
       <header class="task-head">
         <div class="task-tabs" id="task-tabs"></div>

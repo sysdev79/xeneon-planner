@@ -1,11 +1,11 @@
 /* Xeneon Planner - 스타일
-   v01.00 (2026-11-03)
+   v01.01 (2026-11-06)
    대상 해상도: 840x344 / 1680x344 / 1680x688 / 2114x581 / 2560x720
-   폭·높이에 따라 body 에 클래스가 붙는다 (app.js 의 applyLayout 참조):
-     .h-short   높이 400 이하
-     .w-narrow  폭 1000 이하
-     .w-wide    폭 1400 이상
-     .cols-2    캘린더를 날짜별 2열로 배치 (폭 1400 이상 + 높이 480 이상)
+   body 클래스 (app.js 의 applyLayout 참조):
+     .h-short / .w-narrow / .w-wide / .portrait   크기 분기
+     .view-both / .view-calendar / .view-tasks    표시 범위 (URL view=)
+     .range-day / .range-week / .range-month      캘린더 범위
+   body 변수: --day-cols (일 보기 날짜 열 수), --task-cols (할일 전용 보기 열 수)
 */
 
 :root {
@@ -118,12 +118,11 @@ body {
 .next.soon .next-when { color: var(--warn); }
 .next.live .next-when { color: var(--ok); }
 
-/* ---------- 날짜 그룹 ---------- */
-.cal-grid { display: block; }
-.cols-2 .cal-grid {
+/* ---------- 일 보기: 날짜 그룹 ---------- */
+.cal-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--gap);
+  grid-template-columns: repeat(var(--day-cols, 1), minmax(0, 1fr));
+  gap: 0 var(--gap);
   align-items: start;
 }
 .day { padding-top: var(--gap); min-width: 0; }
@@ -329,3 +328,114 @@ body {
 /* 세로 방향(높이 > 폭): 위아래로 배치 */
 .portrait .app { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr auto; }
 .portrait .status { grid-column: 1; }
+
+/* ================= v01.01: 표시 범위 (view=) ================= */
+.app.single { grid-template-columns: 1fr; }
+.view-calendar .panel-task { display: none; }
+.view-tasks .panel-cal { display: none; }
+.view-tasks .task-head { padding: calc(var(--gap) * 0.6) var(--gap); }
+
+/* 캘린더 범위 전환 버튼 (일/주/월) */
+.range-tabs { display: flex; gap: 4px; align-self: center; flex: 0 0 auto; }
+.rtab {
+  min-width: 2.6em; min-height: 40px; padding: 0 0.6em;
+  border-radius: 9px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font: inherit; font-size: 0.9em; cursor: pointer;
+}
+.rtab.active { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 700; }
+.h-short .rtab { min-height: 32px; min-width: 2.2em; font-size: 0.85em; }
+.w-narrow .range-tabs { gap: 2px; }
+.empty.small { padding: 0.4em; font-size: 0.85em; }
+
+/* 캘린더 전용 보기에서 주·월은 헤더를 얇게 */
+.view-calendar.range-month .cal-head, .view-calendar.range-week .cal-head { padding-top: 6px; padding-bottom: 6px; }
+.view-calendar.range-month .clock-time, .view-calendar.range-week .clock-time { font-size: 2em; }
+.view-calendar.range-month .next, .view-calendar.range-week .next { padding: 0.25em 0.8em; }
+.view-calendar.range-month .next-label, .view-calendar.range-week .next-label { display: none; }
+.range-week .cal-body, .range-month .cal-body { overflow: hidden; display: flex; flex-direction: column; padding-top: var(--gap); }
+
+/* ---------- 주 보기 ---------- */
+.week-grid {
+  flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;
+}
+.wday { display: flex; flex-direction: column; min-height: 0; border-radius: 10px; background: color-mix(in srgb, var(--panel-2) 45%, transparent); border: 1px solid transparent; }
+.wday.today { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
+.wday.pastday { opacity: 0.6; }
+.wday-title { display: flex; align-items: baseline; gap: 0.35em; padding: 0.35em 0.6em 0.2em; font-weight: 700; }
+.wday-title .wd { color: var(--muted); font-size: 0.85em; font-weight: 600; }
+.wday.weekend .wday-title .wd { color: var(--danger); }
+.wday.today .wday-title .dn { color: var(--accent); }
+.wday-title .cnt { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 0.8em; }
+.wday-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none; padding: 0 5px 5px; }
+.wday-list::-webkit-scrollbar { display: none; }
+.ev.compact {
+  display: block; min-height: 0; padding: 0.3em 0.5em; margin-bottom: 3px;
+  border-left: 4px solid var(--accent); border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-2) 80%, transparent);
+}
+.ev.compact .ev-time { font-size: 0.78em; color: var(--muted); }
+.ev.compact .ev-title { font-size: 0.9em; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.25; }
+.ev.compact.allday .ev-time { color: var(--dim); }
+.ev.compact.declined .ev-title { text-decoration: line-through; color: var(--muted); }
+.ev.compact.live { background: color-mix(in srgb, var(--ok) 18%, var(--panel)); }
+.h-short .ev.compact .ev-title { -webkit-line-clamp: 1; }
+
+/* ---------- 월 보기 ---------- */
+.month-grid {
+  flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: auto repeat(var(--rows, 5), minmax(0, 1fr));
+  gap: 3px;
+}
+.mhead { text-align: center; color: var(--muted); font-size: 0.78em; font-weight: 600; padding-bottom: 2px; }
+.mhead.weekend { color: var(--danger); }
+.mcell {
+  position: relative; min-height: 0; overflow: hidden;
+  border-radius: 7px; padding: 1px 4px 2px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+  display: flex; flex-direction: column;
+}
+.mcell.other { opacity: 0.4; }
+.mcell.today { outline: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.mnum { font-size: 0.8em; font-weight: 700; line-height: 1.1; display: flex; gap: 0.4em; align-items: baseline; flex: 0 0 auto; }
+.mcell.weekend .mnum { color: var(--danger); }
+.mcell.today .mnum { color: var(--accent); }
+.mnum .cnt { color: var(--dim); font-weight: 400; font-size: 0.85em; }
+.mlist { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.chip {
+  font-size: 0.72em; line-height: 1.2; padding: 0 4px; margin-top: 1px; border-radius: 3px;
+  background: color-mix(in srgb, var(--c, var(--accent)) 22%, transparent);
+  border-left: 3px solid var(--c, var(--accent));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chip b { font-weight: 600; color: var(--text); }
+.chip.past { opacity: 0.55; }
+.chip.declined { text-decoration: line-through; opacity: 0.5; }
+.more { position: absolute; right: 4px; bottom: 1px; font-size: 0.68em; color: var(--muted); }
+.w-wide .chip { font-size: 0.74em; }
+.h-short .month-grid { gap: 2px; }
+.h-short .chip { font-size: 0.66em; padding: 0 3px; }
+.h-short .mnum { font-size: 0.75em; }
+
+/* ---------- 할일 전용 보기: 가로 열 배치 ---------- */
+.view-tasks .task-body { overflow: hidden; display: flex; flex-direction: column; }
+.task-cols {
+  flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-columns: repeat(var(--task-cols, 3), minmax(0, 1fr)); gap: var(--gap);
+}
+.tcol {
+  min-height: 0; overflow-y: auto; scrollbar-width: none;
+  border-radius: 10px; padding: 0 8px 8px;
+  background: color-mix(in srgb, var(--panel-2) 40%, transparent);
+}
+.tcol::-webkit-scrollbar { display: none; }
+.tcol .tsec:first-child { padding-top: 6px; }
+.tcol .tsec-title { background: transparent; }
+.view-tasks .task { min-height: 42px; }
+.view-tasks .task-main { padding: 0.15em 0; }
+.view-tasks .task-meta { font-size: 0.78em; }
+.view-tasks.h-short .task { min-height: 36px; }
+.view-tasks.h-short .task-meta { display: none; }
+.view-tasks .chk { height: 42px; }
+.view-tasks.h-short .chk { height: 36px; }

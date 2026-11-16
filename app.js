@@ -1,10 +1,14 @@
 /* Xeneon Planner - 위젯 로직
-   v01.00 (2026-11-03)
+   v01.01 (2026-11-06)
 
    URL 파라미터
      api        (필수) GAS 웹앱 배포 주소 (…/exec)
      key        (필수) GAS 스크립트 속성 SECRET_KEY 와 같은 값
-     days       조회 일수, 기본 2 (오늘·내일), 최대 14
+     view       both | calendar | tasks   (기본 both)   ← v01.01
+     range      day | week | month        (기본 day, 캘린더 초기 범위) ← v01.01
+     cols       할일 전용 보기의 열 수 2~4 (기본 3) ← v01.01
+     weekstart  mon | sun (기본 mon, 주·월 보기 시작 요일) ← v01.01
+     days       일 보기 조회 일수, 기본 2 (오늘·내일), 최대 14
      tz         시간대, 기본 Asia/Seoul
      calendars  표시할 캘린더 ID 또는 이름을 쉼표로 (생략 시 전체)
      refresh    자동 갱신 주기(초), 기본 60, 최소 20
@@ -21,9 +25,14 @@
   // 설정
   // ------------------------------------------------------------
   var qs = new URLSearchParams(location.search);
+  function pick(v, allowed, def) { return allowed.indexOf(v) >= 0 ? v : def; }
   var CFG = {
     api: (qs.get('api') || '').trim(),
     key: (qs.get('key') || '').trim(),
+    view: pick(qs.get('view'), ['both', 'calendar', 'tasks'], 'both'),
+    range: pick(qs.get('range'), ['day', 'week', 'month'], 'day'),
+    cols: clamp(parseInt(qs.get('cols') || '3', 10) || 3, 2, 4),
+    weekStart: qs.get('weekstart') === 'sun' ? 0 : 1,
     days: clamp(parseInt(qs.get('days') || '2', 10) || 2, 1, 14),
     tz: qs.get('tz') || 'Asia/Seoul',
     calendars: qs.get('calendars') || '',
@@ -34,21 +43,25 @@
     showDone: qs.get('done') !== '0',
     list: qs.get('list') || ''
   };
-  var CACHE_KEY = 'xeneon-planner-cache-v1';
+  var CACHE_KEY = 'xeneon-planner-cache-v2';
   var LIST_KEY = 'xeneon-planner-list';
+  var RANGE_KEY = 'xeneon-planner-range-' + CFG.view;
 
   var state = {
     data: null,
     activeList: 'all',
+    range: CFG.range,
     lastFetch: 0,
     error: '',
     busy: {}
   };
+  try { state.range = pick(localStorage.getItem(RANGE_KEY), ['day', 'week', 'month'], CFG.range); } catch (e) { /* 무시 */ }
 
   var $ = function (id) { return document.getElementById(id); };
   var el = {
     app: $('app'), clockTime: $('clock-time'), clockDate: $('clock-date'),
-    next: $('next-event'), calBody: $('cal-body'),
+    next: $('next-event'), calBody: $('cal-body'), rangeTabs: $('range-tabs'),
+    panelCal: $('panel-cal'), panelTask: $('panel-task'),
     tabs: $('task-tabs'), summary: $('task-summary'), taskBody: $('task-body'),
     addForm: $('task-add'), addList: $('add-list'), addTitle: $('add-title'),
     status: $('status'), statusText: $('status-text'), refreshBtn: $('refresh-btn'),
@@ -67,24 +80,50 @@
     b.classList.toggle('w-narrow', w <= 1000);
     b.classList.toggle('w-wide', w >= 1400);
     b.classList.toggle('portrait', h > w);
-    b.classList.toggle('cols-2', w >= 1400 && h >= 480 && CFG.days >= 2);
+    b.classList.remove('view-both', 'view-calendar', 'view-tasks');
+    b.classList.add('view-' + CFG.view);
+    b.classList.remove('range-day', 'range-week', 'range-month');
+    b.classList.add('range-' + state.range);
+    // 일 보기에서 날짜를 가로로 몇 열로 놓을지
+    var dayCols = 1;
+    if (CFG.view === 'calendar') dayCols = w >= 1400 ? Math.min(CFG.days, 4) : (w >= 1000 ? Math.min(CFG.days, 2) : 1);
+    else if (w >= 1400 && h >= 480) dayCols = Math.min(CFG.days, 2);
+    b.style.setProperty('--day-cols', String(dayCols));
+    b.style.setProperty('--task-cols', String(CFG.view === 'tasks' ? CFG.cols : 1));
     b.style.fontSize = 'calc(var(--fs) * ' + CFG.scale + ')';
+    el.app.classList.toggle('single', CFG.view !== 'both');
   }
 
   // ------------------------------------------------------------
-  // 날짜 유틸 (모두 CFG.tz 기준)
+  // 날짜 유틸 (모두 CFG.tz 기준, 날짜 문자열은 'YYYY-MM-DD')
   // ------------------------------------------------------------
   var fmtTime = new Intl.DateTimeFormat('ko-KR', { timeZone: CFG.tz, hour: '2-digit', minute: '2-digit', hour12: false });
   var fmtDateLong = new Intl.DateTimeFormat('ko-KR', { timeZone: CFG.tz, month: 'long', day: 'numeric', weekday: 'short' });
   var fmtDateShort = new Intl.DateTimeFormat('ko-KR', { timeZone: CFG.tz, month: 'numeric', day: 'numeric', weekday: 'short' });
   var fmtYmd = new Intl.DateTimeFormat('en-CA', { timeZone: CFG.tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+  var WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
 
-  function ymd(d) { return fmtYmd.format(d); }               // 'YYYY-MM-DD'
+  function ymd(d) { return fmtYmd.format(d); }
   function todayYmd() { return ymd(new Date()); }
+  function parts(y) { var p = y.split('-').map(Number); return { y: p[0], m: p[1], d: p[2] }; }
   function addDaysYmd(base, n) {
-    var p = base.split('-').map(Number);
-    var d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
-    return d.toISOString().slice(0, 10);
+    var p = parts(base);
+    return new Date(Date.UTC(p.y, p.m - 1, p.d + n)).toISOString().slice(0, 10);
+  }
+  function diffDays(a, b) { // a - b (일)
+    var pa = parts(a), pb = parts(b);
+    return Math.round((Date.UTC(pa.y, pa.m - 1, pa.d) - Date.UTC(pb.y, pb.m - 1, pb.d)) / 86400000);
+  }
+  function dow(y) { return new Date(y + 'T12:00:00Z').getUTCDay(); } // 0=일
+  function startOfWeek(y) { var off = (dow(y) - CFG.weekStart + 7) % 7; return addDaysYmd(y, -off); }
+  function startOfMonth(y) { return y.slice(0, 8) + '01'; }
+  function daysInMonth(y) { var p = parts(y); return new Date(Date.UTC(p.y, p.m, 0)).getUTCDate(); }
+  function monthGrid(y) { // 월 보기 격자: 시작(주 시작 요일) ~ 42일
+    var first = startOfMonth(y);
+    var start = startOfWeek(first);
+    var last = first.slice(0, 8) + String(daysInMonth(y)).padStart(2, '0');
+    var rows = Math.ceil((diffDays(last, start) + 1) / 7);
+    return { start: start, rows: rows, month: y.slice(0, 7) };
   }
   function hhmm(iso) { return fmtTime.format(new Date(iso)); }
   function dayLabel(y) {
@@ -100,13 +139,25 @@
     if (mins < 60) return mins + '분 후';
     var h = Math.floor(mins / 60), m = mins % 60;
     if (h < 24) return h + '시간' + (m ? ' ' + m + '분' : '') + ' 후';
-    var d = Math.floor(h / 24);
-    return d + '일 후';
+    return Math.floor(h / 24) + '일 후';
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+
+  // 조회 구간: 일·주·월 보기를 모두 덮는 합집합 (보기 전환 시 재조회 없이 즉시 그리기 위함)
+  function fetchWindow() {
+    var t = todayYmd();
+    if (CFG.view === 'tasks') return { from: t, days: 1 };
+    var g = monthGrid(t);
+    var start = g.start < t ? g.start : t;
+    var endDay = addDaysYmd(t, CFG.days - 1);
+    var gridEnd = addDaysYmd(g.start, g.rows * 7 - 1);
+    var weekEnd = addDaysYmd(startOfWeek(t), 6);
+    var end = [endDay, gridEnd, weekEnd].sort().pop();
+    return { from: start, days: diffDays(end, start) + 1 };
   }
 
   // ------------------------------------------------------------
@@ -123,11 +174,13 @@
   // ------------------------------------------------------------
   function buildGetUrl() {
     var u = new URL(CFG.api);
+    var fw = fetchWindow();
     u.searchParams.set('key', CFG.key);
-    u.searchParams.set('days', String(CFG.days));
+    u.searchParams.set('from', fw.from);
+    u.searchParams.set('days', String(fw.days));
     u.searchParams.set('tz', CFG.tz);
     if (CFG.calendars) u.searchParams.set('calendars', CFG.calendars);
-    u.searchParams.set('_', String(Date.now())); // 캐시 우회
+    u.searchParams.set('_', String(Date.now()));
     return u.toString();
   }
 
@@ -161,7 +214,6 @@
 
   function postAction(payload) {
     payload.key = CFG.key;
-    // text/plain 으로 보내야 preflight(OPTIONS) 없이 GAS 에 도달한다
     return fetch(CFG.api, {
       method: 'POST',
       redirect: 'follow',
@@ -180,32 +232,59 @@
   }
 
   // ------------------------------------------------------------
-  // 렌더링: 캘린더
+  // 렌더링 공통
   // ------------------------------------------------------------
   function renderAll() {
-    renderNext();
-    renderCalendar();
-    renderTabs();
-    renderTasks();
-    renderAddForm();
+    if (CFG.view !== 'tasks') { renderNext(); renderRangeTabs(); renderCalendar(); }
+    if (CFG.view !== 'calendar') { renderTabs(); renderTasks(); renderAddForm(); }
   }
 
-  function timedEvents() {
-    return (state.data.events || []).filter(function (e) { return !e.allDay; });
+  function eventsByDay() {
+    var byDay = {};
+    (state.data.events || []).forEach(function (e) {
+      if (e.allDay) {
+        var d = e.start, guard = 0;
+        while (d < e.end && guard++ < 62) { (byDay[d] = byDay[d] || []).push(e); d = addDaysYmd(d, 1); }
+      } else {
+        var k = ymd(new Date(e.start));
+        (byDay[k] = byDay[k] || []).push(e);
+      }
+    });
+    Object.keys(byDay).forEach(function (k) {
+      byDay[k].sort(function (a, b) {
+        if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+        return a.allDay ? 0 : new Date(a.start) - new Date(b.start);
+      });
+    });
+    return byDay;
+  }
+
+  function evTags(e) {
+    var tags = '';
+    if (e.meetingLink) tags += '<span class="tag meet">화상</span>';
+    if (e.responseStatus === 'declined') tags += '<span class="tag declined">거절</span>';
+    if (e.responseStatus === 'tentative') tags += '<span class="tag tentative">미정</span>';
+    if (e.responseStatus === 'needsAction') tags += '<span class="tag">미응답</span>';
+    return tags;
+  }
+
+  function evClass(e, now) {
+    var s = e.allDay ? 0 : new Date(e.start).getTime();
+    var en = e.allDay ? 0 : new Date(e.end).getTime();
+    return 'ev' + (e.allDay ? ' allday' : '') +
+      (!e.allDay && en <= now ? ' past' : '') +
+      (!e.allDay && s <= now && en > now ? ' live' : '') +
+      (e.responseStatus === 'declined' ? ' declined' : '');
   }
 
   function renderNext() {
     var now = Date.now();
-    var upcoming = timedEvents().filter(function (e) {
-      return e.responseStatus !== 'declined' && new Date(e.end).getTime() > now;
-    });
+    var upcoming = (state.data.events || []).filter(function (e) {
+      return !e.allDay && e.responseStatus !== 'declined' && new Date(e.end).getTime() > now;
+    }).sort(function (a, b) { return new Date(a.start) - new Date(b.start); });
     el.next.classList.remove('soon', 'live');
     var t = el.next.querySelector('.next-title'), w = el.next.querySelector('.next-when');
-    if (!upcoming.length) {
-      t.textContent = '예정된 일정 없음';
-      w.textContent = CFG.days === 1 ? '오늘' : CFG.days + '일 내';
-      return;
-    }
+    if (!upcoming.length) { t.textContent = '예정된 일정 없음'; w.textContent = ''; return; }
     var ev = upcoming[0];
     var start = new Date(ev.start).getTime(), end = new Date(ev.end).getTime();
     t.textContent = ev.title;
@@ -215,68 +294,120 @@
     } else {
       var mins = Math.round((start - now) / 60000);
       if (mins <= 15) el.next.classList.add('soon');
-      var prefix = ymd(new Date(ev.start)) === todayYmd() ? '' : dayLabel(ymd(new Date(ev.start))) + ' ';
+      var sd = ymd(new Date(ev.start));
+      var prefix = sd === todayYmd() ? '' : dayLabel(sd) + ' ';
       w.textContent = prefix + hhmm(ev.start) + ' · ' + minutesText(mins);
     }
   }
 
-  function renderCalendar() {
-    var events = state.data.events || [];
-    var byDay = {};
-    var t = todayYmd();
-    for (var i = 0; i < CFG.days; i++) byDay[addDaysYmd(t, i)] = [];
-
-    events.forEach(function (e) {
-      if (e.allDay) {
-        // 종일 일정: 시작일~종료일(배타) 사이 모든 날짜에 표시
-        var d = e.start, endEx = e.end;
-        var guard = 0;
-        while (d < endEx && guard++ < 31) {
-          if (byDay[d]) byDay[d].push(e);
-          d = addDaysYmd(d, 1);
-        }
-      } else {
-        var k = ymd(new Date(e.start));
-        if (byDay[k]) byDay[k].push(e);
-      }
+  function renderRangeTabs() {
+    Array.prototype.forEach.call(el.rangeTabs.querySelectorAll('.rtab'), function (b) {
+      b.classList.toggle('active', b.getAttribute('data-range') === state.range);
     });
+  }
 
+  function renderCalendar() {
+    if (state.range === 'week') return renderWeek();
+    if (state.range === 'month') return renderMonth();
+    return renderDayList();
+  }
+
+  // ---------- 일 보기: 날짜별 목록 ----------
+  function renderDayList() {
+    var byDay = eventsByDay();
+    var t = todayYmd();
     var now = Date.now();
-    var html = '<div class="cal-grid">';
-    Object.keys(byDay).forEach(function (day) {
-      var list = byDay[day];
+    var html = '<div class="cal-grid day-grid">';
+    for (var i = 0; i < CFG.days; i++) {
+      var day = addDaysYmd(t, i);
+      var list = byDay[day] || [];
       html += '<section class="day"><div class="day-title">' + escapeHtml(dayLabel(day)) +
         '<span class="sub">' + escapeHtml(daySub(day)) + '</span>' +
         '<span class="cnt">' + list.length + '건</span></div>';
-      if (!list.length) {
-        html += '<div class="empty">일정 없음</div></section>';
-        return;
-      }
-      var nowDrawn = day !== t; // 오늘만 현재 시각 선 표시
+      if (!list.length) { html += '<div class="empty">일정 없음</div></section>'; continue; }
+      var nowDrawn = day !== t;
       list.forEach(function (e) {
         var s = e.allDay ? 0 : new Date(e.start).getTime();
-        var en = e.allDay ? 0 : new Date(e.end).getTime();
         if (!nowDrawn && !e.allDay && s > now) { html += '<div class="now-line"></div>'; nowDrawn = true; }
-        var cls = 'ev' + (e.allDay ? ' allday' : '') +
-          (!e.allDay && en <= now ? ' past' : '') +
-          (!e.allDay && s <= now && en > now ? ' live' : '');
-        var tags = '';
-        if (e.meetingLink) tags += '<span class="tag meet">화상</span>';
-        if (e.responseStatus === 'declined') tags += '<span class="tag declined">거절</span>';
-        if (e.responseStatus === 'tentative') tags += '<span class="tag tentative">미정</span>';
-        if (e.responseStatus === 'needsAction') tags += '<span class="tag">미응답</span>';
-        html += '<div class="' + cls + '">' +
+        html += '<div class="' + evClass(e, now) + '">' +
           '<div class="ev-bar" style="background:' + escapeHtml(e.color) + '"></div>' +
           '<div class="ev-time">' + (e.allDay ? '종일' : '<b>' + hhmm(e.start) + '</b><br>' + hhmm(e.end)) + '</div>' +
           '<div class="ev-main"><div class="ev-title">' + escapeHtml(e.title) + '</div>' +
           (e.location ? '<div class="ev-loc">' + escapeHtml(e.location) + '</div>' : '') + '</div>' +
-          '<div class="ev-tags">' + tags + '</div></div>';
+          '<div class="ev-tags">' + evTags(e) + '</div></div>';
       });
       if (!nowDrawn) html += '<div class="now-line"></div>';
       html += '</section>';
-    });
+    }
     html += '</div>';
     el.calBody.innerHTML = html;
+  }
+
+  // ---------- 주 보기: 7열 ----------
+  function renderWeek() {
+    var byDay = eventsByDay();
+    var t = todayYmd();
+    var now = Date.now();
+    var start = startOfWeek(t);
+    var html = '<div class="week-grid">';
+    for (var i = 0; i < 7; i++) {
+      var day = addDaysYmd(start, i);
+      var list = byDay[day] || [];
+      var p = parts(day);
+      var wd = dow(day);
+      html += '<section class="wday' + (day === t ? ' today' : '') + (day < t ? ' pastday' : '') + (wd === 0 || wd === 6 ? ' weekend' : '') + '">' +
+        '<div class="wday-title"><span class="wd">' + WEEKDAY[wd] + '</span><span class="dn">' + p.d + '</span>' +
+        (list.length ? '<span class="cnt">' + list.length + '</span>' : '') + '</div><div class="wday-list">';
+      if (!list.length) html += '<div class="empty small">-</div>';
+      list.forEach(function (e) {
+        html += '<div class="' + evClass(e, now) + ' compact" style="border-left-color:' + escapeHtml(e.color) + '">' +
+          '<div class="ev-time">' + (e.allDay ? '종일' : hhmm(e.start)) + '</div>' +
+          '<div class="ev-title">' + escapeHtml(e.title) + '</div></div>';
+      });
+      html += '</div></section>';
+    }
+    html += '</div>';
+    el.calBody.innerHTML = html;
+  }
+
+  // ---------- 월 보기: 7열 x N행 ----------
+  function renderMonth() {
+    var byDay = eventsByDay();
+    var t = todayYmd();
+    var now = Date.now();
+    var g = monthGrid(t);
+    var html = '<div class="month-grid" style="--rows:' + g.rows + '">';
+    for (var i = 0; i < 7; i++) {
+      var wd = (CFG.weekStart + i) % 7;
+      html += '<div class="mhead' + (wd === 0 || wd === 6 ? ' weekend' : '') + '">' + WEEKDAY[wd] + '</div>';
+    }
+    for (var r = 0; r < g.rows * 7; r++) {
+      var day = addDaysYmd(g.start, r);
+      var list = byDay[day] || [];
+      var inMonth = day.slice(0, 7) === g.month;
+      var wd2 = dow(day);
+      html += '<div class="mcell' + (day === t ? ' today' : '') + (inMonth ? '' : ' other') + (wd2 === 0 || wd2 === 6 ? ' weekend' : '') + '" data-day="' + day + '">' +
+        '<div class="mnum">' + parts(day).d + (list.length ? '<span class="cnt">' + list.length + '</span>' : '') + '</div><div class="mlist">';
+      list.forEach(function (e) {
+        html += '<div class="chip' + (e.allDay ? ' allday' : '') + (e.responseStatus === 'declined' ? ' declined' : '') +
+          (!e.allDay && new Date(e.end).getTime() <= now ? ' past' : '') + '" style="--c:' + escapeHtml(e.color) + '">' +
+          (e.allDay ? '' : '<b>' + hhmm(e.start) + '</b> ') + escapeHtml(e.title) + '</div>';
+      });
+      html += '</div><div class="more"></div></div>';
+    }
+    html += '</div>';
+    el.calBody.innerHTML = html;
+    // 칸에 못 들어간 일정 수를 "+n" 으로 표시
+    Array.prototype.forEach.call(el.calBody.querySelectorAll('.mcell'), function (cell) {
+      var ml = cell.querySelector('.mlist'), chips = ml.children, more = cell.querySelector('.more');
+      var hidden = 0;
+      // offsetTop 은 position:relative 인 .mcell 기준이므로 목록 영역의 아래 경계도 같은 기준으로 계산
+      var limit = ml.offsetTop + ml.clientHeight;
+      for (var i = 0; i < chips.length; i++) {
+        if (chips[i].offsetTop + chips[i].offsetHeight > limit + 1) { chips[i].style.visibility = 'hidden'; hidden++; }
+      }
+      if (hidden) more.textContent = '+' + hidden;
+    });
   }
 
   // ------------------------------------------------------------
@@ -296,7 +427,6 @@
       counts[t.listId] = (counts[t.listId] || 0) + 1;
       counts.all = (counts.all || 0) + 1;
     });
-    // 처음 선택 목록: 저장값 > ?list= > 전체
     if (!state.tabsInit) {
       state.tabsInit = true;
       var saved = '';
@@ -313,6 +443,14 @@
     el.tabs.innerHTML = html;
   }
 
+  var GROUP_LABEL = { overdue: '기한 지남', today: '오늘', upcoming: '예정', nodue: '기한 없음', done: '최근 완료' };
+  // 할일 전용 보기에서 열 수에 따른 그룹 배치
+  var COLUMN_PLAN = {
+    2: [['overdue', 'today'], ['upcoming', 'nodue', 'done']],
+    3: [['overdue', 'today'], ['upcoming'], ['nodue', 'done']],
+    4: [['overdue'], ['today'], ['upcoming'], ['nodue', 'done']]
+  };
+
   function renderTasks() {
     var t = todayYmd();
     var groups = { overdue: [], today: [], upcoming: [], nodue: [], done: [] };
@@ -322,7 +460,7 @@
     visibleTasks().forEach(function (task) {
       if (task.status === 'completed') { if (CFG.showDone) groups.done.push(task); return; }
       if (!task.due) { groups.nodue.push(task); return; }
-      var d = task.due.slice(0, 10); // Tasks API 의 due 는 날짜만 유효
+      var d = task.due.slice(0, 10);
       if (d < t) groups.overdue.push(task);
       else if (d === t) groups.today.push(task);
       else groups.upcoming.push(task);
@@ -336,22 +474,15 @@
     });
     el.summary.innerHTML = (overdueAll ? '<b>지연 ' + overdueAll + '</b> · ' : '') + '오늘 ' + todayAll;
 
-    var order = [
-      ['overdue', '기한 지남'], ['today', '오늘'], ['upcoming', '예정'], ['nodue', '기한 없음'], ['done', '최근 완료']
-    ];
-    var html = '';
-    var total = 0;
-    order.forEach(function (pair) {
-      var key = pair[0], list = groups[key];
-      if (!list.length) return;
-      total += list.length;
-      html += '<section class="tsec ' + key + '"><div class="tsec-title">' + pair[1] + ' · ' + list.length + '</div>';
+    function section(key, list, forceShow) {
+      if (!list.length && !forceShow) return '';
+      var html = '<section class="tsec ' + key + '"><div class="tsec-title">' + GROUP_LABEL[key] + ' · ' + list.length + '</div>';
+      if (!list.length) return html + '<div class="empty small">없음</div></section>';
       list.forEach(function (task) {
         var due = task.due ? task.due.slice(0, 10) : '';
         var dueText = '';
         if (due) {
-          var diff = Math.round((Date.UTC.apply(null, due.split('-').map(Number).map(function (v, i) { return i === 1 ? v - 1 : v; })) -
-            Date.UTC.apply(null, t.split('-').map(Number).map(function (v, i) { return i === 1 ? v - 1 : v; }))) / 86400000);
+          var diff = diffDays(due, t);
           if (diff === 0) dueText = '오늘';
           else if (diff === 1) dueText = '내일';
           else if (diff < 0) dueText = (-diff) + '일 지남';
@@ -365,8 +496,25 @@
           (task.notes ? (state.activeList === 'all' ? ' · ' : '') + escapeHtml(task.notes.split('\n')[0]) : '') + '</div></div>' +
           '<div class="task-due">' + escapeHtml(dueText) + '</div></div>';
       });
-      html += '</section>';
-    });
+      return html + '</section>';
+    }
+
+    var html = '';
+    if (CFG.view === 'tasks') {
+      // 전용 보기: 열 단위 배치, 빈 그룹도 열 제목은 유지
+      var plan = COLUMN_PLAN[CFG.cols];
+      html = '<div class="task-cols">';
+      plan.forEach(function (keys) {
+        html += '<div class="tcol">';
+        keys.forEach(function (k, idx) { html += section(k, groups[k], idx === 0 || groups[k].length > 0); });
+        html += '</div>';
+      });
+      html += '</div>';
+      el.taskBody.innerHTML = html;
+      return;
+    }
+    var total = 0;
+    ['overdue', 'today', 'upcoming', 'nodue', 'done'].forEach(function (k) { total += groups[k].length; html += section(k, groups[k], false); });
     el.taskBody.innerHTML = total ? html : '<div class="empty">할일 없음</div>';
   }
 
@@ -385,6 +533,15 @@
   // ------------------------------------------------------------
   // 상호작용
   // ------------------------------------------------------------
+  el.rangeTabs.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('.rtab');
+    if (!btn) return;
+    state.range = btn.getAttribute('data-range');
+    try { localStorage.setItem(RANGE_KEY, state.range); } catch (e) { /* 무시 */ }
+    applyLayout();
+    if (state.data) { renderRangeTabs(); renderCalendar(); }
+  });
+
   el.tabs.addEventListener('click', function (ev) {
     var btn = ev.target.closest('.tab');
     if (!btn) return;
@@ -403,7 +560,6 @@
 
     var toCompleted = task.status !== 'completed';
     var prev = { status: task.status, completed: task.completed };
-    // 낙관적 갱신
     task.status = toCompleted ? 'completed' : 'needsAction';
     task.completed = toCompleted ? new Date().toISOString() : '';
     state.busy[id] = true;
@@ -443,7 +599,7 @@
   function start() {
     document.documentElement.setAttribute('data-theme', CFG.theme);
     applyLayout();
-    window.addEventListener('resize', applyLayout);
+    window.addEventListener('resize', function () { applyLayout(); if (state.data && state.range === 'month') renderMonth(); });
     tickClock();
     setInterval(tickClock, 1000);
 
@@ -456,7 +612,6 @@
       return;
     }
 
-    // 캐시가 있으면 먼저 그려서 빈 화면 시간을 줄인다
     try {
       var cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
       if (cached && cached.data) {
@@ -469,9 +624,7 @@
 
     fetchData();
     setInterval(fetchData, CFG.refresh * 1000);
-    // 다음 일정 카운트다운과 지난 일정 흐림 처리는 30초마다 다시 그린다
-    setInterval(function () { if (state.data) { renderNext(); renderCalendar(); } }, 30000);
-    // 날짜가 바뀌면 전체 갱신
+    setInterval(function () { if (state.data && CFG.view !== 'tasks') { renderNext(); renderCalendar(); } }, 30000);
     var lastDay = todayYmd();
     setInterval(function () {
       var d = todayYmd();
