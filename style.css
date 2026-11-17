@@ -1,5 +1,5 @@
 /* Xeneon Planner - 스타일
-   v01.02 (2026-11-16)  - both 보기 캘린더:할일 = 2:1 (모든 크기)
+   v01.03 (2026-11-17)  - 할일 구분 버튼(전체/지연/오늘/예정/기한 없음) 추가
    대상 해상도: 840x344 / 1680x344 / 1680x688 / 2114x581 / 2560x720
    body 클래스 (app.js 의 applyLayout 참조):
      .h-short / .w-narrow / .w-wide / .portrait   크기 분기
@@ -178,8 +178,8 @@ body {
 
 /* ---------- 할일 ---------- */
 .task-head {
-  display: flex; align-items: center; gap: var(--gap);
-  padding: calc(var(--gap) * 0.7) var(--gap);
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: calc(var(--gap) * 0.6) var(--gap);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
@@ -195,8 +195,25 @@ body {
 }
 .tab.active { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 600; }
 .tab .n { opacity: 0.75; margin-left: 0.3em; }
-.task-summary { color: var(--muted); font-size: 0.85em; white-space: nowrap; }
-.task-summary b { color: var(--danger); }
+/* 할일 구분 버튼 */
+.group-tabs { display: flex; gap: 6px; }
+.group-tabs[hidden] { display: none; }
+.gtab {
+  flex: 1 1 0; min-width: 0;
+  min-height: 40px; padding: 0 0.4em;
+  border-radius: 9px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 0.9em; cursor: pointer; white-space: nowrap;
+}
+.gtab .n { opacity: 0.8; margin-left: 0.3em; font-variant-numeric: tabular-nums; }
+.gtab.active { color: #0b1220; font-weight: 700; border-color: transparent; }
+.gtab.active.all { background: var(--accent); }
+.gtab.active.overdue { background: var(--danger); }
+.gtab.active.today { background: var(--warn); }
+.gtab.active.upcoming { background: var(--accent); }
+.gtab.active.nodue { background: var(--muted); color: var(--text); }
+.gtab.overdue:not(.active) .n { color: var(--danger); }
+.gtab.today:not(.active) .n { color: var(--warn); }
 
 .tsec { padding-top: calc(var(--gap) * 0.8); }
 .tsec-title {
@@ -307,6 +324,8 @@ body {
 .h-short .day-title { font-size: 0.95em; margin-bottom: 0.2em; }
 .h-short .task-head { padding: 6px var(--gap); }
 .h-short .tab { min-height: 32px; font-size: 0.85em; }
+.h-short .gtab { min-height: 30px; font-size: 0.82em; }
+.h-short .task-head { gap: 4px; }
 .h-short .task { min-height: 40px; }
 .h-short .task-meta { display: none; }
 .h-short .status { display: none; }
@@ -318,7 +337,7 @@ body {
 .w-narrow .ev { grid-template-columns: 4px 5.8em minmax(0, 1fr) auto; }
 .w-narrow .ev-tags .tag:not(.meet) { display: none; }
 .w-narrow .task-due { padding: 0 0.4em; }
-.w-narrow .task-summary { display: none; }
+.w-narrow .gtab { font-size: 0.8em; padding: 0 0.2em; }
 .w-narrow .next-title { font-size: 0.95em; }
 
 /* 폭 1400 이상 (1680x688, 2114x581, 2560x720): 글자 키움 */

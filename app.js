@@ -1,5 +1,5 @@
 /* Xeneon Planner - 위젯 로직
-   v01.01 (2026-11-06)
+   v01.03 (2026-11-17)
 
    URL 파라미터
      api        (필수) GAS 웹앱 배포 주소 (…/exec)
@@ -7,6 +7,7 @@
      view       both | calendar | tasks   (기본 both)   ← v01.01
      range      day | week | month        (기본 day, 캘린더 초기 범위) ← v01.01
      cols       할일 전용 보기의 열 수 2~4 (기본 3) ← v01.01
+     group      all | overdue | today | upcoming | nodue  (기본 all, 할일 초기 구분) ← v01.03
      weekstart  mon | sun (기본 mon, 주·월 보기 시작 요일) ← v01.01
      days       일 보기 조회 일수, 기본 2 (오늘·내일), 최대 14
      tz         시간대, 기본 Asia/Seoul
@@ -32,6 +33,7 @@
     view: pick(qs.get('view'), ['both', 'calendar', 'tasks'], 'both'),
     range: pick(qs.get('range'), ['day', 'week', 'month'], 'day'),
     cols: clamp(parseInt(qs.get('cols') || '3', 10) || 3, 2, 4),
+    group: pick(qs.get('group'), ['all', 'overdue', 'today', 'upcoming', 'nodue'], 'all'),
     weekStart: qs.get('weekstart') === 'sun' ? 0 : 1,
     days: clamp(parseInt(qs.get('days') || '2', 10) || 2, 1, 14),
     tz: qs.get('tz') || 'Asia/Seoul',
@@ -45,24 +47,27 @@
   };
   var CACHE_KEY = 'xeneon-planner-cache-v2';
   var LIST_KEY = 'xeneon-planner-list';
+  var GROUP_KEY = 'xeneon-planner-group';
   var RANGE_KEY = 'xeneon-planner-range-' + CFG.view;
 
   var state = {
     data: null,
     activeList: 'all',
+    group: CFG.group,
     range: CFG.range,
     lastFetch: 0,
     error: '',
     busy: {}
   };
   try { state.range = pick(localStorage.getItem(RANGE_KEY), ['day', 'week', 'month'], CFG.range); } catch (e) { /* 무시 */ }
+  try { state.group = pick(localStorage.getItem(GROUP_KEY), ['all', 'overdue', 'today', 'upcoming', 'nodue'], CFG.group); } catch (e) { /* 무시 */ }
 
   var $ = function (id) { return document.getElementById(id); };
   var el = {
     app: $('app'), clockTime: $('clock-time'), clockDate: $('clock-date'),
     next: $('next-event'), calBody: $('cal-body'), rangeTabs: $('range-tabs'),
     panelCal: $('panel-cal'), panelTask: $('panel-task'),
-    tabs: $('task-tabs'), summary: $('task-summary'), taskBody: $('task-body'),
+    tabs: $('task-tabs'), groupTabs: $('group-tabs'), taskBody: $('task-body'),
     addForm: $('task-add'), addList: $('add-list'), addTitle: $('add-title'),
     status: $('status'), statusText: $('status-text'), refreshBtn: $('refresh-btn'),
     setup: $('setup'), setupSample: $('setup-sample')
@@ -236,7 +241,7 @@
   // ------------------------------------------------------------
   function renderAll() {
     if (CFG.view !== 'tasks') { renderNext(); renderRangeTabs(); renderCalendar(); }
-    if (CFG.view !== 'calendar') { renderTabs(); renderTasks(); renderAddForm(); }
+    if (CFG.view !== 'calendar') { renderTabs(); renderGroupTabs(); renderTasks(); renderAddForm(); }
   }
 
   function eventsByDay() {
@@ -451,12 +456,10 @@
     4: [['overdue'], ['today'], ['upcoming'], ['nodue', 'done']]
   };
 
-  function renderTasks() {
+  // 선택된 목록의 할일을 구분별로 나눈다
+  function groupTasks() {
     var t = todayYmd();
     var groups = { overdue: [], today: [], upcoming: [], nodue: [], done: [] };
-    var listName = {};
-    (state.data.taskLists || []).forEach(function (l) { listName[l.id] = l.title; });
-
     visibleTasks().forEach(function (task) {
       if (task.status === 'completed') { if (CFG.showDone) groups.done.push(task); return; }
       if (!task.due) { groups.nodue.push(task); return; }
@@ -465,18 +468,32 @@
       else if (d === t) groups.today.push(task);
       else groups.upcoming.push(task);
     });
+    return groups;
+  }
 
-    var overdueAll = 0, todayAll = 0;
-    (state.data.tasks || []).forEach(function (task) {
-      if (task.status !== 'needsAction' || !task.due) return;
-      var d = task.due.slice(0, 10);
-      if (d < t) overdueAll++; else if (d === t) todayAll++;
-    });
-    el.summary.innerHTML = (overdueAll ? '<b>지연 ' + overdueAll + '</b> · ' : '') + '오늘 ' + todayAll;
+  // 할일 구분 버튼 (전체 / 지연 / 오늘 / 예정 / 기한 없음). 전용 보기(열 배치)에서는 숨김
+  var GROUP_TABS = [['all', '전체'], ['overdue', '지연'], ['today', '오늘'], ['upcoming', '예정'], ['nodue', '기한 없음']];
+  function renderGroupTabs() {
+    if (CFG.view === 'tasks') { el.groupTabs.innerHTML = ''; el.groupTabs.hidden = true; return; }
+    el.groupTabs.hidden = false;
+    var g = groupTasks();
+    var counts = { overdue: g.overdue.length, today: g.today.length, upcoming: g.upcoming.length, nodue: g.nodue.length };
+    counts.all = counts.overdue + counts.today + counts.upcoming + counts.nodue;
+    el.groupTabs.innerHTML = GROUP_TABS.map(function (p) {
+      return '<button type="button" class="gtab ' + p[0] + (state.group === p[0] ? ' active' : '') + '" data-group="' + p[0] + '">' +
+        p[1] + '<span class="n">' + counts[p[0]] + '</span></button>';
+    }).join('');
+  }
 
-    function section(key, list, forceShow) {
+  function renderTasks() {
+    var t = todayYmd();
+    var groups = groupTasks();
+    var listName = {};
+    (state.data.taskLists || []).forEach(function (l) { listName[l.id] = l.title; });
+
+    function section(key, list, forceShow, noTitle) {
       if (!list.length && !forceShow) return '';
-      var html = '<section class="tsec ' + key + '"><div class="tsec-title">' + GROUP_LABEL[key] + ' · ' + list.length + '</div>';
+      var html = '<section class="tsec ' + key + '">' + (noTitle ? '' : '<div class="tsec-title">' + GROUP_LABEL[key] + ' · ' + list.length + '</div>');
       if (!list.length) return html + '<div class="empty small">없음</div></section>';
       list.forEach(function (task) {
         var due = task.due ? task.due.slice(0, 10) : '';
@@ -513,6 +530,12 @@
       el.taskBody.innerHTML = html;
       return;
     }
+    // 구분 버튼이 '전체' 가 아니면 그 구분만, 제목 없이 바로 목록
+    if (state.group !== 'all') {
+      var one = groups[state.group] || [];
+      el.taskBody.innerHTML = one.length ? section(state.group, one, true, true) : '<div class="empty">' + GROUP_LABEL[state.group] + ' 할일 없음</div>';
+      return;
+    }
     var total = 0;
     ['overdue', 'today', 'upcoming', 'nodue', 'done'].forEach(function (k) { total += groups[k].length; html += section(k, groups[k], false); });
     el.taskBody.innerHTML = total ? html : '<div class="empty">할일 없음</div>';
@@ -547,7 +570,16 @@
     if (!btn) return;
     state.activeList = btn.getAttribute('data-list');
     try { localStorage.setItem(LIST_KEY, state.activeList); } catch (e) { /* 무시 */ }
-    renderTabs(); renderTasks(); renderAddForm();
+    renderTabs(); renderGroupTabs(); renderTasks(); renderAddForm();
+  });
+
+  el.groupTabs.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('.gtab');
+    if (!btn) return;
+    state.group = btn.getAttribute('data-group');
+    try { localStorage.setItem(GROUP_KEY, state.group); } catch (e) { /* 무시 */ }
+    renderGroupTabs(); renderTasks();
+    el.taskBody.scrollTop = 0;
   });
 
   el.taskBody.addEventListener('click', function (ev) {
@@ -563,19 +595,19 @@
     task.status = toCompleted ? 'completed' : 'needsAction';
     task.completed = toCompleted ? new Date().toISOString() : '';
     state.busy[id] = true;
-    renderTabs(); renderTasks();
+    renderTabs(); renderGroupTabs(); renderTasks();
 
     postAction({ action: toCompleted ? 'complete' : 'uncomplete', listId: listId, taskId: id })
       .then(function () {
         delete state.busy[id];
         setStatus((toCompleted ? '완료: ' : '되돌림: ') + task.title);
-        renderTabs(); renderTasks();
+        renderTabs(); renderGroupTabs(); renderTasks();
       })
       .catch(function (err) {
         task.status = prev.status; task.completed = prev.completed;
         delete state.busy[id];
         setStatus('처리 실패: ' + (err && err.message || err), true);
-        renderTabs(); renderTasks();
+        renderTabs(); renderGroupTabs(); renderTasks();
       });
   });
 
