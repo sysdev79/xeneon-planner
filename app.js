@@ -1,5 +1,5 @@
 /* Xeneon Planner - 위젯 로직
-   v01.03 (2026-11-17)
+   v01.04 (2026-11-17)
 
    URL 파라미터
      api        (필수) GAS 웹앱 배포 주소 (…/exec)
@@ -8,6 +8,9 @@
      range      day | week | month        (기본 day, 캘린더 초기 범위) ← v01.01
      cols       할일 전용 보기의 열 수 2~4 (기본 3) ← v01.01
      group      all | overdue | today | upcoming | nodue  (기본 all, 할일 초기 구분) ← v01.03
+     weather    0 이면 날씨 숨김 (기본 표시) ← v01.04
+     lat, lon   날씨 좌표 (기본 부산 35.1796, 129.0756) ← v01.04
+     city       날씨 아래 표시할 지명 (기본 부산) ← v01.04
      weekstart  mon | sun (기본 mon, 주·월 보기 시작 요일) ← v01.01
      days       일 보기 조회 일수, 기본 2 (오늘·내일), 최대 14
      tz         시간대, 기본 Asia/Seoul
@@ -34,6 +37,10 @@
     range: pick(qs.get('range'), ['day', 'week', 'month'], 'day'),
     cols: clamp(parseInt(qs.get('cols') || '3', 10) || 3, 2, 4),
     group: pick(qs.get('group'), ['all', 'overdue', 'today', 'upcoming', 'nodue'], 'all'),
+    weather: qs.get('weather') !== '0',
+    lat: parseFloat(qs.get('lat') || '35.1796') || 35.1796,
+    lon: parseFloat(qs.get('lon') || '129.0756') || 129.0756,
+    city: qs.get('city') || '부산',
     weekStart: qs.get('weekstart') === 'sun' ? 0 : 1,
     days: clamp(parseInt(qs.get('days') || '2', 10) || 2, 1, 14),
     tz: qs.get('tz') || 'Asia/Seoul',
@@ -48,6 +55,8 @@
   var CACHE_KEY = 'xeneon-planner-cache-v2';
   var LIST_KEY = 'xeneon-planner-list';
   var GROUP_KEY = 'xeneon-planner-group';
+  var WEATHER_KEY = 'xeneon-planner-weather';
+  var WEATHER_REFRESH_MS = 10 * 60 * 1000; // 날씨는 10분마다
   var RANGE_KEY = 'xeneon-planner-range-' + CFG.view;
 
   var state = {
@@ -70,7 +79,8 @@
     tabs: $('task-tabs'), groupTabs: $('group-tabs'), taskBody: $('task-body'),
     addForm: $('task-add'), addList: $('add-list'), addTitle: $('add-title'),
     status: $('status'), statusText: $('status-text'), refreshBtn: $('refresh-btn'),
-    setup: $('setup'), setupSample: $('setup-sample')
+    setup: $('setup'), setupSample: $('setup-sample'),
+    weather: $('weather'), wIcon: $('w-icon'), wTemp: $('w-temp'), wCity: $('w-city')
   };
 
   function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
@@ -163,6 +173,65 @@
     var weekEnd = addDaysYmd(startOfWeek(t), 6);
     var end = [endDay, gridEnd, weekEnd].sort().pop();
     return { from: start, days: diffDays(end, start) + 1 };
+  }
+
+  // ------------------------------------------------------------
+  // 날씨 (Open-Meteo, 키 불필요) - 아이콘 + 온도
+  // ------------------------------------------------------------
+  var WX_SVG = {
+    sun: '<svg viewBox="0 0 24 24" fill="none" stroke="#FFC845" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2" fill="#FFC845" stroke="none"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>',
+    moon: '<svg viewBox="0 0 24 24" fill="#CBD5E1"><path d="M15.5 3a9 9 0 1 0 5.5 16.2A9.5 9.5 0 0 1 15.5 3z"/></svg>',
+    cloudsun: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="8" r="3.2" fill="#FFC845" stroke="none"/><path d="M8 1.8v1.6M1.8 8h1.6M3.6 3.6l1.1 1.1" stroke="#FFC845"/><path d="M9 20h8.5a3.5 3.5 0 0 0 .6-6.95A5 5 0 0 0 8.6 12.2 3.9 3.9 0 0 0 9 20z" fill="#CBD5E1" stroke="none"/></svg>',
+    cloud: '<svg viewBox="0 0 24 24" fill="#B8C2D1"><path d="M7 19h10.5a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.6 9.3 4.9 4.9 0 0 0 7 19z"/></svg>',
+    fog: '<svg viewBox="0 0 24 24" fill="none" stroke="#B8C2D1" stroke-width="2.2" stroke-linecap="round"><path d="M4 9h16M3 13h18M5 17h14M7 21h10"/></svg>',
+    rain: '<svg viewBox="0 0 24 24" fill="none" stroke-linecap="round"><path d="M7 15h10.5a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.6 5.3 4.9 4.9 0 0 0 7 15z" fill="#B8C2D1"/><path d="M8.5 17.5l-1.2 3M12.5 17.5l-1.2 3M16.5 17.5l-1.2 3" stroke="#5AA9FF" stroke-width="2.2"/></svg>',
+    snow: '<svg viewBox="0 0 24 24" fill="none" stroke-linecap="round"><path d="M7 14h10.5a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.6 4.3 4.9 4.9 0 0 0 7 14z" fill="#B8C2D1"/><g stroke="#E8F4FF" stroke-width="1.8"><path d="M8 17v4M6.3 18l3.4 2M6.3 20l3.4-2M16 17v4M14.3 18l3.4 2M14.3 20l3.4-2"/></g></svg>',
+    thunder: '<svg viewBox="0 0 24 24" fill="none"><path d="M7 14h10.5a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.6 4.3 4.9 4.9 0 0 0 7 14z" fill="#9AA5B6"/><path d="M13 12l-3.5 5.5h3L11 22l4.5-6h-3L14 12z" fill="#FFC845"/></svg>',
+    wind: '<svg viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="2.2" stroke-linecap="round"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5M3 13h15a2.5 2.5 0 1 1-2.5 2.5M3 18h8a2 2 0 1 1-2 2"/></svg>'
+  };
+  // WMO 코드 -> 아이콘, 한글 설명
+  function wxKind(code, isDay, wind) {
+    if (code >= 95) return ['thunder', '뇌우'];
+    if (code >= 85 || (code >= 71 && code <= 77)) return ['snow', '눈'];
+    if (code >= 80 || (code >= 61 && code <= 67)) return ['rain', '비'];
+    if (code >= 51 && code <= 57) return ['rain', '이슬비'];
+    if (code === 45 || code === 48) return ['fog', '안개'];
+    if (wind >= 9) return ['wind', '바람'];           // 9 m/s 이상이면 바람 우선 (강풍주의보 기준 14 m/s 보다 낮게 잡음)
+    if (code === 3) return ['cloud', '흐림'];
+    if (code === 2) return ['cloudsun', '구름 조금'];
+    if (code === 1) return [isDay ? 'sun' : 'moon', '대체로 맑음'];
+    return [isDay ? 'sun' : 'moon', '맑음'];
+  }
+  function renderWeather(w, stale) {
+    if (!CFG.weather) return;
+    el.weather.hidden = false;
+    el.wCity.textContent = CFG.city;
+    el.weather.classList.toggle('stale', !!stale);
+    if (!w) { el.wIcon.innerHTML = WX_SVG.cloud; el.wTemp.textContent = '--°'; el.weather.title = '날씨 정보 없음'; return; }
+    var k = wxKind(w.code, w.isDay, w.wind);
+    el.wIcon.innerHTML = WX_SVG[k[0]];
+    el.wTemp.textContent = Math.round(w.temp) + '°';
+    el.weather.title = CFG.city + ' ' + k[1] + ' ' + w.temp + '°C, 바람 ' + w.wind + ' m/s';
+  }
+  function fetchWeather() {
+    if (!CFG.weather) return;
+    var u = 'https://api.open-meteo.com/v1/forecast?latitude=' + CFG.lat + '&longitude=' + CFG.lon +
+      '&current=temperature_2m,weather_code,wind_speed_10m,is_day&wind_speed_unit=ms&timezone=' + encodeURIComponent(CFG.tz);
+    fetch(u, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var c = j && j.current;
+        if (!c) throw new Error('응답 형식');
+        var w = { temp: c.temperature_2m, code: c.weather_code, wind: c.wind_speed_10m, isDay: c.is_day !== 0, t: Date.now() };
+        try { localStorage.setItem(WEATHER_KEY, JSON.stringify(w)); } catch (e) { /* 무시 */ }
+        renderWeather(w, false);
+      })
+      .catch(function () {
+        // 실패 시 마지막 값(3시간 이내)을 흐리게 유지
+        var w = null;
+        try { w = JSON.parse(localStorage.getItem(WEATHER_KEY) || 'null'); } catch (e) { /* 무시 */ }
+        renderWeather(w && Date.now() - w.t < 3 * 3600000 ? w : null, true);
+      });
   }
 
   // ------------------------------------------------------------
@@ -653,6 +722,12 @@
         setStatus('캐시 표시 중 (' + fmtTime.format(new Date(cached.t)) + ')');
       }
     } catch (e) { /* 무시 */ }
+
+    if (CFG.view !== 'tasks' && CFG.weather) {
+      try { var cw = JSON.parse(localStorage.getItem(WEATHER_KEY) || 'null'); if (cw) renderWeather(cw, true); } catch (e) { /* 무시 */ }
+      fetchWeather();
+      setInterval(fetchWeather, WEATHER_REFRESH_MS);
+    }
 
     fetchData();
     setInterval(fetchData, CFG.refresh * 1000);

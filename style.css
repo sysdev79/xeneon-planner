@@ -1,5 +1,5 @@
 /* Xeneon Planner - 스타일
-   v01.03 (2026-11-17)  - 할일 구분 버튼(전체/지연/오늘/예정/기한 없음) 추가
+   v01.04 (2026-11-17)  - 날씨(부산) 아이콘·온도, 시계 날짜 중앙 정렬, 일/주/월 버튼 확대
    대상 해상도: 840x344 / 1680x344 / 1680x688 / 2114x581 / 2560x720
    body 클래스 (app.js 의 applyLayout 참조):
      .h-short / .w-narrow / .w-wide / .portrait   크기 분기
@@ -88,7 +88,7 @@ body {
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
-.clock { flex: 0 0 auto; }
+.clock { flex: 0 0 auto; text-align: center; }
 .clock-time {
   font-size: 2.6em;
   font-weight: 700;
@@ -96,11 +96,24 @@ body {
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-.clock-date { color: var(--muted); margin-top: 0.3em; font-size: 0.95em; }
+.clock-date { color: var(--muted); margin-top: 0.3em; font-size: 0.95em; text-align: center; }
+
+/* 날씨: 시계 왼쪽, 아이콘 + 온도 + 도시 */
+.weather {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 4.2em; padding: 0 0.3em; border-right: 1px solid var(--line); margin-right: 0.2em;
+}
+.weather[hidden] { display: none; }
+.w-icon { width: 2.9em; height: 2.9em; }
+.w-icon svg { width: 100%; height: 100%; display: block; }
+.w-temp { font-size: 1.25em; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; margin-top: 0.1em; }
+.w-city { font-size: 0.72em; color: var(--muted); line-height: 1.2; }
+.weather.stale { opacity: 0.55; }
 
 .next {
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 56%;
   background: var(--panel-2);
   border-radius: 10px;
   padding: 0.5em 0.9em;
@@ -355,14 +368,19 @@ body {
 .view-tasks .task-head { padding: calc(var(--gap) * 0.6) var(--gap); }
 
 /* 캘린더 범위 전환 버튼 (일/주/월) */
-.range-tabs { display: flex; gap: 4px; align-self: center; flex: 0 0 auto; }
+.range-tabs { display: flex; gap: 8px; align-self: stretch; align-items: stretch; flex: 0 0 auto; margin-left: auto; }
 .rtab {
-  min-width: 2.6em; min-height: 40px; padding: 0 0.6em;
-  border-radius: 9px; border: 1px solid var(--line);
-  background: transparent; color: var(--muted); font: inherit; font-size: 0.9em; cursor: pointer;
+  min-width: 3.6em; min-height: 56px; padding: 0 0.8em;
+  border-radius: 12px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font: inherit; font-size: 1.05em; font-weight: 600; cursor: pointer;
 }
 .rtab.active { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 700; }
-.h-short .rtab { min-height: 32px; min-width: 2.2em; font-size: 0.85em; }
+.h-short .rtab { min-height: 36px; min-width: 2.6em; font-size: 0.9em; padding: 0 0.5em; }
+.h-short .range-tabs { gap: 4px; }
+.h-short .w-icon { width: 1.7em; height: 1.7em; }
+.h-short .w-temp { font-size: 1em; }
+.h-short .w-city { display: none; }
+.h-short .weather { min-width: 3em; }
 .w-narrow .range-tabs { gap: 2px; }
 .empty.small { padding: 0.4em; font-size: 0.85em; }
 
